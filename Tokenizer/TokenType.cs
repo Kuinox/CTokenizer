@@ -17,6 +17,7 @@ namespace Tokenizer
         StringDeclaration,
         Semicolon,
         Number,
-        Unknown
+        PreprocessorDirective,
+        Unknown,
     }
 }
