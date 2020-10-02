@@ -1,3 +1,4 @@
+using Microsoft.CodeAnalysis.CSharp;
 using System;
 using System.Buffers;
 using System.CodeDom;
@@ -14,6 +15,11 @@ namespace Tokenizer
     {
         static async Task Main( string[] args )
         {
+            var tokens = SyntaxFactory.ParseTokens( @"string txt = $""{ $""{""test""}"" }""" );
+            foreach( var token in tokens )
+            {
+                
+            }
             Stopwatch stopwatch = new Stopwatch();
             stopwatch.Start();
             var files = Directory.GetFiles( @"C:\dev\", "*.cs", SearchOption.AllDirectories );
@@ -24,6 +30,7 @@ namespace Tokenizer
             stopwatch.Stop();
             Console.WriteLine( $"Processed {files.Length} files in {stopwatch.Elapsed}" );
             Console.WriteLine( $"Or {stopwatch.Elapsed / files.Length} per file." );
+            string t = $"{$"{$"{""}"}"}";
         }
 
         static async Task ParseFile( string filePath )
@@ -37,7 +44,7 @@ namespace Tokenizer
                     pipe.AdvanceTo( result.Buffer.Start, result.Buffer.End );
                     result = await pipe.ReadAsync();
                 }
-                ParseSelf( filePath, result.Buffer );   
+                ParseSelf( filePath, result.Buffer );
             }
         }
 
@@ -47,7 +54,7 @@ namespace Tokenizer
             while( c.Read() )
             {
                 if( c.CurrentToken.TokenType == TokenType.Unknown )
-                //if(c.CurrentToken.TokenType != TokenType.Whitespace)
+                //if( c.CurrentToken.TokenType != TokenType.Whitespace )
                 //if( c.CurrentToken.TokenType == TokenType.Number )
                 {
                     Console.WriteLine( filePath + " " + c.CurrentToken.TokenType + " " + ToLiteral( c.CurrentToken.Value ) );

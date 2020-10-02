@@ -1,587 +1,269 @@
+using Microsoft.Toolkit.HighPerformance.Buffers;
 using System;
 using System.Buffers;
+using System.Diagnostics;
 using System.IO;
+using System.IO.Pipelines;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace Tokenizer
 {
     public ref struct CTokenizer
     {
-        SequenceReader<byte> _reader;
+        //TODO: in case of not enough byte, i need to return a NotEnough bytes, and the position must be on the previous token !
+        SequenceReader<char> _reader;
         readonly StringBuilder _builder;
-        public CTokenizer( ReadOnlySequence<byte> sequence )
+        public CTokenizer( ReadOnlySequence<char> sequence )
         {
-            _reader = new SequenceReader<byte>( sequence );
+            _reader = new SequenceReader<char>( sequence );
             CurrentToken = Token.None;
             _builder = new StringBuilder();
-            if( _reader.TryPeek( out byte firstByte ) && firstByte == 0xEF )
-            {
-                _reader.Advance( 1 );
-                if( !_reader.TryPeek( out firstByte ) || firstByte != 0xBB ) throw new InvalidDataException( "Invalid BOM" );
-                _reader.Advance( 1 );
-                if( !_reader.TryPeek( out firstByte ) || firstByte != 0xBF ) throw new InvalidDataException( "Invalid BOM" );
-                _reader.Advance( 1 );
-            }
         }
         public Token CurrentToken { get; private set; }
         public SequencePosition Position => _reader.Position;
 
-        public bool Read()
+        OperationStatus PreviousCharsAsToken( TokenType tokenType, SequencePosition startPosition )
         {
-            if( !_reader.TryPeakChar( out char chr ) ) return false;
-            if( char.IsWhiteSpace( chr ) )
-            {
-                CurrentToken = new Token( TokenType.Whitespace, chr.ToString() );
-                _reader.Advance( 1 );
-                return true;
-            }
+            CurrentToken = new Token( tokenType, _reader.SliceToNow( startPosition ) );
+            return OperationStatus.Done;
+        }
 
-            if( char.IsLetter( chr ) || chr == '_' )
-            {
-                CurrentToken = new Token( TokenType.Word, ReadWord() );
-                return true;
-            }
+        OperationStatus NotEnoughData( SequencePosition startPosition, int rewind )
+        {
+            CurrentToken = new Token( TokenType.Unknown, _reader.SliceToNow( startPosition ) );
+            _reader.Rewind( rewind );
+            return OperationStatus.NeedMoreData;
+        }
 
-            if( char.IsNumber( chr ) )
-            {
-                CurrentToken = new Token( TokenType.Number, ReadNumber() );
-                return true;
-            }
+        public OperationStatus Read()
+        {
+            if( !_reader.TryPeek( out char chr ) ) return OperationStatus.Done;
 
+            if( char.IsLetter( chr ) || chr == '_' ) return ReadWord( Position );
+
+            if( char.IsNumber( chr ) ) return ReadNumber();
+
+            SequencePosition startPos = Position;
+            _reader.Advance( 1 );
+            if( char.IsWhiteSpace( chr ) ) return PreviousCharsAsToken( TokenType.Whitespace, startPos );
+            bool hasNextChar = _reader.TryPeek( out char chr2 );
             switch( chr )
             {
                 case ';':
-                    {
-                        CurrentToken = Token.Semicolon;
-                        _reader.Advance( 1 );
-                        return true;
-                    }
-                case '.':
-                    {
-                        _reader.Advance( 1 );
-                        if( _reader.TryPeakChar( out char op ) && op == '=' )
-                        {
-                            _reader.Advance( 1 );
-                            CurrentToken = Token.DotAssign;
-                            return true;
-                        }
-                        CurrentToken = Token.Dot;
-                        return true;
-                    }
-                case '=':
-                    {
-                        _reader.Advance( 1 );
-                        if( _reader.TryPeakChar( out char op ) )
-                        {
-                            if( op == '=' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = Token.Equal;
-                            }
-
-                            if( op == '>' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = Token.Arrow;
-                            }
-                            return true;
-                        }
-                        CurrentToken = Token.Assign;
-                        return true;
-                    }
+                    return PreviousCharsAsToken( TokenType.Semicolon, startPos );
                 case '{':
-                    {
-                        CurrentToken = Token.CurlyOpen;
-                        _reader.Advance( 1 );
-                        return true;
-                    }
+                    return PreviousCharsAsToken( TokenType.BlockOpen, startPos );
                 case '}':
-                    {
-                        CurrentToken = Token.CurlyClose;
-                        _reader.Advance( 1 );
-                        return true;
-                    }
+                    return PreviousCharsAsToken( TokenType.BlockClose, startPos );
                 case '(':
-                    {
-                        CurrentToken = Token.ParenthesesOpen;
-                        _reader.Advance( 1 );
-                        return true;
-                    }
+                    return PreviousCharsAsToken( TokenType.BlockOpen, startPos );
                 case ')':
-                    {
-                        CurrentToken = Token.ParenthesesClose;
-                        _reader.Advance( 1 );
-                        return true;
-                    }
+                    return PreviousCharsAsToken( TokenType.BlockClose, startPos );
                 case '[':
-                    {
-                        CurrentToken = Token.BracketOpen;
-                        _reader.Advance( 1 );
-                        return true;
-                    }
+                    return PreviousCharsAsToken( TokenType.BlockOpen, startPos );
                 case ']':
-                    {
-                        CurrentToken = Token.BracketClose;
-                        _reader.Advance( 1 );
-                        return true;
-                    }
-                case '<':
-                    {
-                        if( _reader.TryPeakChar( out char op ) )
-                        {
-                            if( op == '=' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = Token.LessOrEqual;
-                                return true;
-                            }
-                            if( op == '<' )
-                            {
-                                _reader.Advance( 1 );
-                                if( _reader.TryPeakChar( out char op2 ) && op2 == '=' )
-                                {
-                                    _reader.Advance( 1 );
-                                    CurrentToken = Token.LeftShiftAssign;
-                                    return true;
-                                }
-                                CurrentToken = Token.LeftShift;
-                                return true;
-                            }
-                        }
-                        _reader.Advance( 1 );
-                        CurrentToken = Token.AngleOpen;
-                        return true;
-                    }
-                case '>':
-                    {
-                        _reader.Advance( 1 );
-                        if( _reader.TryPeakChar( out char op ) )
-                        {
-                            if( op == '=' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = Token.MoreOrEqual;
-                                return true;
-                            }
-                            if( op == '>' )
-                            {
-                                _reader.Advance( 1 );
-                                if( _reader.TryPeakChar( out char op2 ) && op2 == '=' )
-                                {
-                                    _reader.Advance( 1 );
-                                    CurrentToken = Token.RightShiftAssign;
-                                    return true;
-                                }
-                                CurrentToken = Token.RightShift;
-                                return true;
-                            }
-                        }
-                        CurrentToken = Token.AngleClose;
-                        return true;
-                    }
-                case '!':
-                    {
-                        _reader.Advance( 1 );
-                        if( _reader.TryPeakChar( out char op ) )
-                        {
-                            if( op == '=' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = Token.NotEqual;
-                                return true;
-                            }
-                            if( op == '.' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = Token.NullForgiving;
-                                return true;
-                            }
-                        }
-                        CurrentToken = Token.Not;
-                        return true;
-                    }
-                case ',':
-                    {
-                        _reader.Advance( 1 );
-                        CurrentToken = Token.Comma;
-                        return true;
-                    }
-                case '|':
-                    {
-                        _reader.Advance( 1 );
-                        if( _reader.TryPeakChar( out char op ) )
-                        {
-                            if( op == '=' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = Token.BitwiseOrAssign;
-                                return true;
-                            }
-                            if( op == '|' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = Token.Or;
-                                return true;
-                            }
-                        }
-                        CurrentToken = Token.BitwiseOr;
-                        return true;
-                    }
-                case '&':
-                    {
-                        _reader.Advance( 1 );
-                        if( _reader.TryPeakChar( out char op ) )
-                        {
-                            if( op == '=' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = Token.BitwiseAnd;
-                                return true;
-                            }
-                            if( op == '|' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = Token.And;
-                                return true;
-                            }
-                        }
-                        CurrentToken = Token.BitwiseAnd;
-                        return true;
-                    }
-                case ':':
-                    {
-                        _reader.Advance( 1 );
-                        if( _reader.TryPeakChar( out char op ) )
-                        {
-                            if( op == '=' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = Token.ColonAssign;
-                                return true;
-                            }
-                            if( op == ':' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = Token.DoubleColon;
-                                return true;
-                            }
-                        }
-                        CurrentToken = Token.Colon;
-                        return true;
-                    }
-                case '+':
-                    {
-                        _reader.Advance( 1 );
-                        if( _reader.TryPeakChar( out char op ) )
-                        {
-                            if( op == '=' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = Token.PlusAssign;
-                                return true;
-                            }
-                            if( op == '+' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = Token.Increment;
-                                return true;
-                            }
-                        }
-                        CurrentToken = Token.Plus;
-                        return true;
-                    }
-                case '-':
-                    {
-                        _reader.Advance( 1 );
-                        if( _reader.TryPeakChar( out char op ) )
-                        {
-                            if( op == '=' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = Token.MinusAssign;
-                                return true;
-                            }
-                            if( op == '+' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = Token.Increment;
-                                return true;
-                            }
-                        }
-                        CurrentToken = Token.Minus;
-                        return true;
-                    }
-                case '*':
-                    {
-                        _reader.Advance( 1 );
-                        if( _reader.TryPeakChar( out char op ) && op == '=' )
-                        {
-                            _reader.Advance( 1 );
-                            CurrentToken = Token.MultiplyAssign;
-                            return true;
-                        }
-                        CurrentToken = Token.Multiply;
-                        return true;
-                    }
+                    return PreviousCharsAsToken( TokenType.BlockClose, startPos );
                 case '~':
-                    {
-                        _reader.Advance( 1 );
-                        CurrentToken = Token.Unary;
-                        return true;
-                    }
+                    return PreviousCharsAsToken( TokenType.Operator, startPos );
                 case '^':
-                    {
-                        _reader.Advance( 1 );
-                        CurrentToken = Token.Xor;
-                        return true;
-                    }
+                    return PreviousCharsAsToken( TokenType.Operator, startPos );
                 case '%':
-                    {
-                        _reader.Advance( 1 );
-                        CurrentToken = Token.Modulo;
-                        return true;
-                    }
-                case '/':
-                    {
-                        _reader.Advance( 1 );
-                        if( _reader.TryPeakChar( out char op ) )
-                        {
-                            if( op == '/' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = new Token( TokenType.Comment, "//" + ReadSingleLineComment() );
-                                return true;
-                            }
-                            if( op == '*' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = new Token( TokenType.Comment, "/*" + ReadMultiLineComment() );
-                                return true;
-                            }
-                            if( op == '=' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = Token.DivideAssign;
-                            }
-                        }
-                        CurrentToken = Token.Divide;
-                        return true;
-                    }
-                case '@':
-                    {
-                        _reader.Advance( 1 );
-                        if( _reader.TryPeakChar( out char nextChar ) )
-                        {
-                            if( nextChar == '"' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = new Token( TokenType.StringDeclaration, "@\"" + ReadString( (byte)'"', (byte)'"' ) );
-                                return true;
-                            }
-                            if( nextChar == '$' )
-                            {
-                                _reader.Advance( 1 );
-                                if( _reader.TryPeakChar( out char char2 ) && char2 == '"' )
-                                {
-                                    _reader.Advance( 1 );
-                                    CurrentToken = new Token( TokenType.StringDeclaration, "@$\"" + ReadString( (byte)'"', (byte)'"' ) );
-                                    return true;
-                                }
-                                CurrentToken = new Token( TokenType.Unknown, "@$" );
-                                return true;
-                            }
-                        }
-                        CurrentToken = new Token( TokenType.Word, '@' + ReadWord() );//TODO: improve error detection: next char should be a word char.
-                        return true;
-                    }
-                case '$':
-                    {
-                        _reader.Advance( 1 );
-                        if( _reader.TryPeakChar( out char nextChar ) )
-                        {
-                            if( nextChar == '"' )
-                            {
-                                _reader.Advance( 1 );
-                                CurrentToken = new Token( TokenType.StringDeclaration, "$\"" + ReadString( (byte)'"', (byte)'"' ) );
-                                return true;
-                            }
-                            if( nextChar == '@' )
-                            {
-                                _reader.Advance( 1 );
-                                if( _reader.TryPeakChar( out char char2 ) && char2 == '"' )
-                                {
-                                    _reader.Advance( 1 );
-                                    CurrentToken = new Token( TokenType.StringDeclaration, "$@\"" + ReadString( (byte)'"', (byte)'"' ) );
-                                    return true;
-                                }
-                                CurrentToken = new Token( TokenType.Unknown, "$@" );
-                            }
-                        }
-                        CurrentToken = new Token( TokenType.Unknown, "$" );
-                        return true;
-                    }
+                    return PreviousCharsAsToken( TokenType.Operator, startPos );
+                case ',':
+                    return PreviousCharsAsToken( TokenType.Operator, startPos );
                 case '"':
                 case '\'':
-                    {
-                        _reader.Advance( 1 );
-                        CurrentToken = new Token( TokenType.StringDeclaration, chr + ReadString( (byte)'\\', (byte)chr ) );
-                        return true;
-                    }
-                case '`':
-                    {
-                        _reader.Advance( 1 );
-                        CurrentToken = new Token( TokenType.StringDeclaration, "`" + ReadString( default, (byte)chr ) );
-                        return true;
-                    }
-                case '#':
-                    {
-                        _reader.Advance( 1 );
-                        CurrentToken = new Token( TokenType.PreprocessorDirective, "#" + ReadSingleLineComment() );
-                        return true;
-                    }
-                case '?':
-                    {
-                        _reader.Advance( 1 );
-                        if( _reader.TryPeakChar( out char op ) )
-                        {
-                            if( op == '?' )
-                            {
-                                _reader.Advance( 1 );
-                                if( _reader.TryPeakChar( out char op2 ) && op2 == '=' )
-                                {
-                                    _reader.Advance( 1 );
-                                    CurrentToken = Token.NullCoalescingAssign;
-                                    return true;
-                                }
-                                CurrentToken = Token.NullCoalescing;
-                                return true;
-                            }
-                        }
-                        CurrentToken = Token.Ternary;
-                        return true;
-                    }
+                    return ReadString( startPos, chr, false, '\\' );
             }
+            if( !hasNextChar ) return NotEnoughData( startPos, 1 );
+            switch( chr )
+            {
+                case '.':
+                    if( chr2 == '=' ) _reader.Advance( 1 );
+                    return PreviousCharsAsToken( TokenType.Operator, startPos );
+                case '*':
+                    if( chr2 == '=' ) _reader.Advance( 1 );
+                    return PreviousCharsAsToken( TokenType.Operator, startPos );
+                case '=':
+                    if( chr2 == '=' || chr2 == '>' ) _reader.Advance( 1 );
+                    return PreviousCharsAsToken( TokenType.Operator, startPos );
+                case '!':
+                    if( chr2 == '=' || chr2 == '.' ) _reader.Advance( 1 );
+                    return PreviousCharsAsToken( TokenType.Operator, startPos );
+                case '&':
+                    if( chr2 == '=' || chr2 == '|' ) _reader.Advance( 1 );
+                    return PreviousCharsAsToken( TokenType.Operator, startPos );
+                case ':':
+                    if( chr2 == '=' || chr2 == ':' ) _reader.Advance( 1 );
+                    return PreviousCharsAsToken( TokenType.Operator, startPos );
+                case '|':
+                    if( chr2 == '=' || chr2 == '|' ) _reader.Advance( 1 );
+                    return PreviousCharsAsToken( TokenType.BlockClose, startPos );
+                case '+':
+                    if( chr2 == '=' || chr2 == '+' ) _reader.Advance( 1 );
+                    return PreviousCharsAsToken( TokenType.Operator, startPos );
+                case '-':
+                    if( chr2 == '=' || chr2 == '-' ) _reader.Advance( 1 );
+                    return PreviousCharsAsToken( TokenType.Operator, startPos );
+                case '<':
+                    if( chr2 == '=' ) _reader.Advance( 1 );
+                    if( chr2 == '<' )
+                    {
+                        _reader.Advance( 1 );
+                        if( !_reader.TryPeek( out char chr3 ) ) return NotEnoughData( startPos, 2 );
+                        if( chr3 == '=' ) _reader.Advance( 1 );
+                    }
+                    return PreviousCharsAsToken( TokenType.Operator, startPos );
+                case '>':
+                    if( chr2 == '=' ) _reader.Advance( 1 );
+                    if( chr2 == '>' )
+                    {
+                        _reader.Advance( 1 );
+                        if( !_reader.TryPeek( out char chr3 ) ) return NotEnoughData( startPos, 2 );
+                        if( chr3 == '=' ) _reader.Advance( 1 );
+                    }
+                    return PreviousCharsAsToken( TokenType.Operator, startPos );
+                case '/':
+                    if( chr2 == '/' )
+                    {
+                        _reader.Advance( 1 );
+                        return ReadSingleLineComment( startPos );
+                    }
+                    if( chr2 == '*' )
+                    {
+                        _reader.Advance( 1 );
+                        return ReadMultiLineComment( startPos );
+                    }
+                    if( chr2 == '=' ) _reader.Advance( 1 );
+                    return PreviousCharsAsToken( TokenType.Operator, startPos );
+                case '@':
+                    if( chr2 == '"' )
+                    {
+                        _reader.Advance( 1 );
+                        return ReadString( startPos, '"', false, '"' );
+                    }
+                    if( chr2 == '$' )
+                    {
+                        _reader.Advance( 1 );
+                        if( !_reader.TryPeek( out char chr3 ) ) return NotEnoughData( startPos, 2 );
+                        if( chr3 == '"' )
+                        {
+                            _reader.Advance( 1 );
+                            return ReadString( startPos, '"', true, '"' );
+                        }
+                        return PreviousCharsAsToken( TokenType.Unknown, startPos );
+                    }
+                    return ReadWord( startPos );
+                case '$':
+                    if( chr2 == '"' )
+                    {
+                        _reader.Advance( 1 );
+                        return ReadString( startPos, '\\', true, '"' );
+                    }
+                    if( chr2 == '@' )
+                    {
+                        _reader.Advance( 1 );
+                        if( !_reader.TryPeek( out char chr3 ) ) return NotEnoughData( startPos, 2 );
+                        if( chr3 == '"' )
+                        {
+                            _reader.Advance( 1 );
+                            return ReadString( startPos, '"', true, '"' );
+                        }
+                    }
+                    return PreviousCharsAsToken( TokenType.Unknown, startPos );
+                case '#':
+                    return PreprocessorDirective( startPos );
+                case '?':
+                    if( chr2 == '?' )
+                    {
+                        _reader.Advance( 1 );
+                        if( !_reader.TryPeek( out char chr3 ) ) return NotEnoughData( startPos, 2 );
+                        if( chr3 == '=' ) _reader.Advance( 1 );
+                    }
+                    return PreviousCharsAsToken( TokenType.Operator, startPos );
+            }
+            return PreviousCharsAsToken( TokenType.Unknown, startPos );
+        }
 
-            CurrentToken = new Token( TokenType.Unknown, chr.ToString() );
-            _reader.Advance( 1 );
+
+        OperationStatus ReadWord( SequencePosition startPos )
+        {
+            Debug.Assert( _reader.Remaining > 0 );
+            SequencePosition beginning = _reader.Position;
+            while( _reader.TryPeek( out char curr ) )
+            {
+                if( !char.IsLetterOrDigit( curr ) && curr != '_' ) break;
+                _reader.Advance( 1 );
+            }
+            SequencePosition end = _reader.Position;
+            Debug.Assert( !beginning.Equals( end ) );
+            CurrentToken = new Token( TokenType.Word, _reader.Sequence.Slice( beginning, end ) );
             return true;
         }
 
 
-        string ReadWord()
+        OperationStatus ReadNumber()
         {
-            bool res = ReadWordPart( out string str );
-            if( res ) return str;
-            _builder.Clear();
-            _builder.Append( str );
-            while( !res )
+            bool reachedDot = false;
+            SequencePosition beginning = _reader.Position;
+            while( _reader.TryPeek( out char curr ) )
             {
-                res = ReadWordPart( out str );
-                _builder.Append( str );
-            }
-            return _builder.ToString();
-        }
-        bool ReadWordPart( out string output )
-        {
-            ReadOnlySpan<byte> span = _reader.UnreadSpan;
-            if( span.Length == 0 )
-            {
-                output = string.Empty;
-                return true;
-            }
-            for( int i = 0; i < span.Length; i++ )
-            {
-                byte curr = span[i];
-                if( (curr & 128) > 0 ) throw new NotImplementedException( "beurk" );
-                char chr = (char)curr;
-                if( !char.IsLetterOrDigit( chr ) && chr != '_' )
+                if( (!char.IsDigit( curr ) && curr != '_') )
                 {
-                    output = Encoding.UTF8.GetString( span[..i] );
-                    _reader.Advance( i );
-                    return true;
-                }
-            }
-            output = Encoding.UTF8.GetString( span );
-            _reader.Advance( span.Length );
-            return false;
-        }
-
-
-        string ReadNumber()
-        {
-            (bool end, bool reachedDot) = ReadNumberPart( false, out string str );
-            if( end ) return str;
-            _builder.Clear();
-            _builder.Append( str );
-            while( !end )
-            {
-                (end, reachedDot) = ReadNumberPart( reachedDot, out str );
-                _builder.Append( str );
-            }
-            return _builder.ToString();
-        }
-
-        (bool end, bool reachedDot) ReadNumberPart( bool allowDot, out string output )
-        {
-            ReadOnlySpan<byte> span = _reader.UnreadSpan;
-            if( span.Length == 0 )
-            {
-                output = string.Empty;
-                return (true, false);
-            }
-            for( int i = 0; i < span.Length; i++ )
-            {
-                byte curr = span[i];
-                char chr = (char)curr;
-                if( (!char.IsDigit( chr ) && chr != '_') )
-                {
-                    if( chr == '.' && allowDot )
+                    if( curr == '.' && !reachedDot )
                     {
-                        allowDot = false;
+                        reachedDot = true;
                     }
                     else
                     {
-                        output = Encoding.UTF8.GetString( span[..i] );
-                        _reader.Advance( i );
-                        return (true, allowDot);
+                        break;
                     }
+                }
+                _reader.Advance( 1 );
+            }
+            SequencePosition end = _reader.Position;
+            Debug.Assert( !beginning.Equals( end ) );
+            CurrentToken = new Token( TokenType.Number, _reader.Sequence.Slice( beginning, end ) );
+            return true;
+        }
 
+        OperationStatus ReadString( SequencePosition startPosition, char closeStringChar, bool interpolated, char? escapeChar )
+        {
+            ReadOnlySequence<byte> remainingSequence = _reader.Sequence.Slice( _reader.Position );
+            SequenceReader<byte> reader = new SequenceReader<byte>( remainingSequence );
+            while( reader.TryPeek( out char curr ) )
+            {
+                reader.Advance( 1 );
+                if( escapeChar.HasValue && curr == escapeChar.Value )
+                {
+                    if( closeStringChar == escapeChar.Value )
+                    {
+                        //we are on an escape char. strings like @"""" double the termination string to escape the double-quote.
+                        if( !reader.TryPeek( out char secondEscape ) )
+                        {
+                            CurrentToken = new Token( TokenType.StringDeclaration, _reader.SliceToNow( startPosition ) );
+                            return true;
+                        }
+                        if( secondEscape == escapeChar.Value )
+                        {
+                            reader.Advance( 1 );//it was a double quote escaped, we can continue.
+                            continue;
+                        }
+                        CurrentToken = new Token( TokenType.StringDeclaration, _reader.SliceToNow( startPosition ) );
+                        return true;
+                    }
+                    continue;
+                }
+                if( curr == closeStringChar )
+                {
+                    CurrentToken = new Token( TokenType.StringDeclaration, _reader.SliceToNow( startPosition ) );
+                    return true;
                 }
             }
-            output = Encoding.UTF8.GetString( span );
-            _reader.Advance( span.Length );
-            return (false, allowDot);
-        }
-
-        string ReadString( byte? escapeChar, byte closeChar )
-        {
-            (bool escapeNextChar, bool end) = ReadStringPart( false, escapeChar, closeChar, out string str );
-            if( end ) return str;
-            _builder.Clear();
-            _builder.Append( str );
-            while( !end )
-            {
-                (escapeNextChar, end) = ReadStringPart( escapeNextChar, escapeChar, closeChar, out str );
-                _builder.Append( str );
-            }
-            return _builder.ToString();
-        }
-
-        (bool escapeNextChar, bool end) ReadStringPart( bool escapeFirstchar, byte? escapeChar, byte closeString, out string output )
-        {
-            bool litteralString = escapeChar.HasValue && escapeChar.Value == closeString;
-            ReadOnlySpan<byte> span = _reader.UnreadSpan;
-            if( span.Length == 0 )
-            {
-                output = string.Empty;
-                return (false, true);
-            }
-            if( escapeFirstchar && litteralString && span[0] != closeString )
-            {
-                output = ((char)span[0]).ToString();
-                return (false, true);
-            }
-            for( int i = escapeFirstchar ? 1 : 0; i < span.Length; i++ )
+            CurrentToken = new Token( TokenType.Unknown, _reader.SliceToNow( startPosition ) );
+            return true;
+            for( int i = 0; i < span.Length; i++ )
             {
                 byte curr = span[i];
                 if( escapeChar.HasValue && curr == escapeChar.Value )
@@ -593,7 +275,7 @@ namespace Tokenizer
                         _reader.Advance( span.Length );
                         return (true, false);
                     }
-                    if( litteralString && span[i] != closeString )
+                    if( isEscapeCharCloseChar && span[i] != closeStringChar )
                     {
                         // we are at the end of a string like this: @""""
                         output = Encoding.UTF8.GetString( span[..i] );
@@ -602,7 +284,7 @@ namespace Tokenizer
                     }
                     continue;
                 }
-                if( curr == closeString )
+                if( curr == closeStringChar )
                 {
                     i++;
                     output = Encoding.UTF8.GetString( span[..i] );
@@ -616,79 +298,34 @@ namespace Tokenizer
         }
 
 
-        string ReadMultiLineComment()
+        OperationStatus ReadMultiLineComment( SequencePosition startPosition )
         {
-            (bool end, bool lastCharStar) = ReadMultiLineComment( out string str, false );
-            if( end ) return str;
-            _builder.Clear();
-            _builder.Append( str );
-            while( !end )
+            bool lastCharIsAStar = false;
+            while( _reader.TryPeek( out char curr ) )
             {
-                (end, lastCharStar) = ReadMultiLineComment( out str, lastCharStar );
-                _builder.Append( str );
-            }
-            return _builder.ToString();
-        }
-
-        (bool end, bool lastCharStar) ReadMultiLineComment( out string output, bool lastCharStar )
-        {
-            ReadOnlySpan<byte> span = _reader.UnreadSpan;
-            if( span.Length == 0 )
-            {
-                output = string.Empty;
-                return (false, false);
-            }
-            for( int i = 0; i < span.Length; i++ )
-            {
-                byte curr = span[i];
-                if( lastCharStar && curr == (byte)'/' )
+                _reader.Advance( 1 );//We advance first, because we want to take the character that make the 
+                if( lastCharIsAStar && curr == '/' )
                 {
-                    output = Encoding.UTF8.GetString( span[..i] );
-                    _reader.Advance( i );
-                    return (true, false);
-                }
-                lastCharStar = curr == (byte)'*';
-            }
-            output = Encoding.UTF8.GetString( span );
-            _reader.Advance( span.Length );
-            return (false, lastCharStar);
-        }
-        string ReadSingleLineComment()
-        {
-            bool end = ReadSingleLineCommentPart( out string str );
-            if( end ) return str;
-            _builder.Clear();
-            _builder.Append( str );
-            while( !end )
-            {
-                end = ReadSingleLineCommentPart( out str );
-                _builder.Append( str );
-            }
-            return _builder.ToString();
-        }
-
-        bool ReadSingleLineCommentPart( out string output )
-        {
-            ReadOnlySpan<byte> span = _reader.UnreadSpan;
-            if( span.Length == 0 )
-            {
-                output = string.Empty;
-                return true;
-            }
-            for( int i = 0; i < span.Length; i++ )
-            {
-                byte curr = span[i];
-                if( curr == (byte)'\n' || curr == (byte)'\r' )
-                {
-                    i++;
-                    output = Encoding.UTF8.GetString( span[..i] );
-                    _reader.Advance( i );
+                    CurrentToken = new Token( TokenType.Comment, _reader.SliceToNow( startPosition ) );
                     return true;
                 }
+                lastCharIsAStar = curr == '*';
             }
-            output = Encoding.UTF8.GetString( span );
-            _reader.Advance( span.Length );
-            return false;
+            CurrentToken = new Token( TokenType.Unknown, _reader.SliceToNow( startPosition ) );
+            return true;
         }
+
+
+        OperationStatus ReadSingleLineComment( SequencePosition startPosition )
+        {
+            while( _reader.TryPeek( out char curr ) )
+            {
+                if( curr == '\n' ) break;
+                _reader.Advance( 1 );
+            }
+            return new Token( TokenType.Comment, _reader.SliceToNow( startPosition ) );
+        }
+
+        OperationStatus PreprocessorDirective( SequencePosition startPosition )
     }
 }
