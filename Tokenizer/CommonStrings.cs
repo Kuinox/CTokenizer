@@ -1,9 +1,3 @@
-using System;
-using System.Buffers;
-using System.Collections.Generic;
-using System.Text;
-using System.Xml.Schema;
-
 namespace Tokenizer
 {
     public static class CommonStrings

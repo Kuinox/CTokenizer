@@ -1,8 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using Tokenizer;
-
 namespace Microbenchmark
 {
     class Program
