@@ -7,12 +7,17 @@ namespace Tokenizer.Tests
     public class TokenizeWords
     {
         [Theory]
-        [InlineData( "makeParameters(", 2)]
-        public void regular_words_tokenized( string theString, int count )
+        [InlineData( "makeParameters(", 2, new int[] { 0 } )]
+        public void regular_words_tokenized( string theString, int count, int[] wordPositions )
         {
             var res = new TokenizerTestHelper( theString );
             res.Tokens.Count.Should().Be( count );
-            if( count == 1 ) res.Tokens.Single().TokenType.Should().Be( TokenType.Word );
+            for( int i = 0; i < res.Tokens.Count; i++ )
+            {
+                bool isWord = res.Tokens[i].TokenType == TokenType.Word;
+                bool shouldBeWord = wordPositions.Contains( i );
+                isWord.Should().Be( shouldBeWord );
+            }
         }
     }
 }

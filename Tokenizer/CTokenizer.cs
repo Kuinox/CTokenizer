@@ -16,7 +16,7 @@ namespace Tokenizer
             _reader = new SequenceReader<char>( sequence );
             CurrentToken = Token.None;
             _rewindCount = 0;
-            _tokenStart = sequence.Start;
+            _tokenStart = _reader.Position;
         }
         public bool End => _reader.End;
         public bool CustomEnd => _reader.Position.Equals( _reader.Sequence.End );
