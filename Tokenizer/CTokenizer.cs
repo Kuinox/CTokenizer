@@ -19,7 +19,6 @@ namespace Tokenizer
             _tokenStart = _reader.Position;
         }
         public bool End => _reader.End;
-        public bool CustomEnd => _reader.Position.Equals( _reader.Sequence.End );
         public Token CurrentToken { get; private set; }
         public SequencePosition Position => _reader.Position;
 
@@ -36,9 +35,9 @@ namespace Tokenizer
             return OperationStatus.Done;
         }
 
-        OperationStatus NotEnoughData()
+        OperationStatus NotEnoughData( TokenType tokenType )
         {
-            CurrentToken = new Token( TokenType.Unknown, _reader.SliceToNow( _tokenStart ) );
+            CurrentToken = new Token( tokenType, _reader.SliceToNow( _tokenStart ) );
             _reader.Rewind( _rewindCount );
             Debug.Assert( _tokenStart.Equals( _reader.Position ) );
             Reset();
@@ -53,12 +52,6 @@ namespace Tokenizer
 
         public OperationStatus Read()
         {
-            var test = _reader.Sequence.Slice( _reader.Position, _reader.Sequence.End );
-            Console.WriteLine( test.Length + " " + _reader.Remaining );
-            if(_reader.End)
-            {
-
-            }
             if( !_reader.TryPeek( out char chr ) )
             {
                 CurrentToken = new Token( TokenType.Unknown, ReadOnlySequence<char>.Empty );
@@ -78,7 +71,7 @@ namespace Tokenizer
                 case '{':
                     return PreviousCharsAsToken( TokenType.BlockOpen );
                 case '}':
-                    return PreviousCharsAsToken( TokenType.BlockClose );
+                    return PreviousCharsAsToken( TokenType.BlockClose ); //Warning: we expect that meeting this char return immediatly a valid token in interpolated string reading.
                 case '(':
                     return PreviousCharsAsToken( TokenType.BlockOpen );
                 case ')':
@@ -99,55 +92,66 @@ namespace Tokenizer
                 case '\'':
                     return ReadString( chr, false, '\\' );
             }
-            if( !hasNextChar ) return NotEnoughData();
             switch( chr )
             {
                 case '.':
+                    if( !hasNextChar ) return NotEnoughData( TokenType.Operator );
                     if( chr2 == '=' ) Advance();
                     return PreviousCharsAsToken( TokenType.Operator );
                 case '*':
+                    if( !hasNextChar ) return NotEnoughData( TokenType.Operator );
                     if( chr2 == '=' ) Advance();
                     return PreviousCharsAsToken( TokenType.Operator );
                 case '=':
+                    if( !hasNextChar ) return NotEnoughData( TokenType.Operator );
                     if( chr2 == '=' || chr2 == '>' ) Advance();
                     return PreviousCharsAsToken( TokenType.Operator );
                 case '!':
+                    if( !hasNextChar ) return NotEnoughData( TokenType.Operator );
                     if( chr2 == '=' || chr2 == '.' ) Advance();
                     return PreviousCharsAsToken( TokenType.Operator );
                 case '&':
+                    if( !hasNextChar ) return NotEnoughData( TokenType.Operator );
                     if( chr2 == '=' || chr2 == '|' ) Advance();
                     return PreviousCharsAsToken( TokenType.Operator );
                 case ':':
+                    if( !hasNextChar ) return NotEnoughData( TokenType.Operator );
                     if( chr2 == '=' || chr2 == ':' ) Advance();
                     return PreviousCharsAsToken( TokenType.Operator );
                 case '|':
+                    if( !hasNextChar ) return NotEnoughData( TokenType.Operator );
                     if( chr2 == '=' || chr2 == '|' ) Advance();
-                    return PreviousCharsAsToken( TokenType.BlockClose );
+                    return PreviousCharsAsToken( TokenType.Operator );
                 case '+':
+                    if( !hasNextChar ) return NotEnoughData( TokenType.Operator );
                     if( chr2 == '=' || chr2 == '+' ) Advance();
                     return PreviousCharsAsToken( TokenType.Operator );
                 case '-':
+                    if( !hasNextChar ) return NotEnoughData( TokenType.Operator );
                     if( chr2 == '=' || chr2 == '-' ) Advance();
                     return PreviousCharsAsToken( TokenType.Operator );
                 case '<':
+                    if( !hasNextChar ) return NotEnoughData( TokenType.Operator );
                     if( chr2 == '=' ) Advance();
                     if( chr2 == '<' )
                     {
                         Advance();
-                        if( !_reader.TryPeek( out char chr3 ) ) return NotEnoughData();
+                        if( !_reader.TryPeek( out char chr3 ) ) return NotEnoughData( TokenType.Operator );
                         if( chr3 == '=' ) Advance();
                     }
                     return PreviousCharsAsToken( TokenType.Operator );
                 case '>':
+                    if( !hasNextChar ) return NotEnoughData( TokenType.Operator );
                     if( chr2 == '=' ) Advance();
                     if( chr2 == '>' )
                     {
                         Advance();
-                        if( !_reader.TryPeek( out char chr3 ) ) return NotEnoughData();
+                        if( !_reader.TryPeek( out char chr3 ) ) return NotEnoughData( TokenType.Operator );
                         if( chr3 == '=' ) Advance();
                     }
                     return PreviousCharsAsToken( TokenType.Operator );
                 case '/':
+                    if( !hasNextChar ) return NotEnoughData( TokenType.Operator );
                     if( chr2 == '/' )
                     {
                         Advance();
@@ -161,6 +165,7 @@ namespace Tokenizer
                     if( chr2 == '=' ) Advance();
                     return PreviousCharsAsToken( TokenType.Operator );
                 case '@':
+                    if( !hasNextChar ) return NotEnoughData( TokenType.Unknown );
                     if( chr2 == '"' )
                     {
                         Advance();
@@ -169,7 +174,7 @@ namespace Tokenizer
                     if( chr2 == '$' )
                     {
                         Advance();
-                        if( !_reader.TryPeek( out char chr3 ) ) return NotEnoughData();
+                        if( !_reader.TryPeek( out char chr3 ) ) return NotEnoughData( TokenType.Unknown );
                         if( chr3 == '"' )
                         {
                             Advance();
@@ -179,15 +184,16 @@ namespace Tokenizer
                     }
                     return ReadWord( true );
                 case '$':
+                    if( !hasNextChar ) return NotEnoughData( TokenType.Unknown );
                     if( chr2 == '"' )
                     {
                         Advance();
-                        return ReadString( '\\', true, '"' );
+                        return ReadString( '"', true, '\\' );
                     }
                     if( chr2 == '@' )
                     {
                         Advance();
-                        if( !_reader.TryPeek( out char chr3 ) ) return NotEnoughData();
+                        if( !_reader.TryPeek( out char chr3 ) ) return NotEnoughData( TokenType.Unknown );
                         if( chr3 == '"' )
                         {
                             Advance();
@@ -198,10 +204,11 @@ namespace Tokenizer
                 case '#':
                     return ReadLine( TokenType.PreprocessorDirective );
                 case '?':
+                    if( !hasNextChar ) return NotEnoughData( TokenType.Operator );
                     if( chr2 == '?' )
                     {
                         Advance();
-                        if( !_reader.TryPeek( out char chr3 ) ) return NotEnoughData();
+                        if( !_reader.TryPeek( out char chr3 ) ) return NotEnoughData( TokenType.Operator );
                         if( chr3 == '=' ) Advance();
                     }
                     return PreviousCharsAsToken( TokenType.Operator );
@@ -212,7 +219,6 @@ namespace Tokenizer
 
         OperationStatus ReadWord( bool startWithVerbatim )
         {
-            if( _reader.Remaining == 0 ) return NotEnoughData();
             while( _reader.TryPeek( out char curr ) )
             {
                 if( !char.IsLetterOrDigit( curr ) && curr != '_' )
@@ -223,7 +229,7 @@ namespace Tokenizer
                 startWithVerbatim = false;
                 Advance();
             }
-            return NotEnoughData();
+            return NotEnoughData( TokenType.Word );
         }
 
 
@@ -244,7 +250,7 @@ namespace Tokenizer
                 }
                 return PreviousCharsAsToken( TokenType.Number );
             }
-            return NotEnoughData();
+            return NotEnoughData( TokenType.Number );
         }
 
         OperationStatus ReadString( char closeStringChar, bool interpolated, char? escapeChar )
@@ -258,9 +264,8 @@ namespace Tokenizer
                     if( closeStringChar == escapeChar.Value )
                     {
                         //we are on an odd escape char. strings like @"""" double the termination string to escape the double-quote.
-                        if( !_reader.TryPeek( out char secondEscape ) ) return NotEnoughData();
+                        if( !_reader.TryPeek( out char secondEscape ) ) return NotEnoughData( TokenType.StringDeclaration );
                         if( secondEscape != escapeChar.Value ) return PreviousCharsAsToken( TokenType.StringDeclaration );
-                        Advance();//it was a double quote escaped, we can continue.
                     }
                     Advance();
                 }
@@ -268,8 +273,23 @@ namespace Tokenizer
                 {
                     return PreviousCharsAsToken( TokenType.StringDeclaration );
                 }
+                if( interpolated && curr == '{' )
+                {
+                    CTokenizer nestedTokenizer = new CTokenizer( _reader.UnreadSequence );
+                    while( true )
+                    {
+                        OperationStatus status = nestedTokenizer.Read();
+                        if( status == OperationStatus.NeedMoreData ) return NotEnoughData( TokenType.Unknown );
+                        Token currToken = nestedTokenizer.CurrentToken;
+                        if( currToken.TokenType != TokenType.BlockClose ) continue;
+                        if( currToken.Value.Length != 1 ) continue;
+                        if( currToken.Value.FirstSpan[0] != '}' ) continue;
+                        _reader.Advance( nestedTokenizer._reader.Consumed );
+                        break;
+                    }
+                }
             }
-            return NotEnoughData();
+            return NotEnoughData( TokenType.StringDeclaration );
         }
 
 
@@ -278,11 +298,11 @@ namespace Tokenizer
             bool lastCharIsAStar = false;
             while( _reader.TryPeek( out char curr ) )
             {
-                Advance();//We advance first, because we want to take the character that make the 
+                Advance();//We advance first, because we want to take the character that complete the comment.
                 if( lastCharIsAStar && curr == '/' ) return PreviousCharsAsToken( TokenType.Comment );
                 lastCharIsAStar = curr == '*';
             }
-            return NotEnoughData();
+            return NotEnoughData( TokenType.Comment );
         }
 
         OperationStatus ReadLine( TokenType tokenType )
@@ -292,7 +312,7 @@ namespace Tokenizer
                 if( curr == '\n' ) return PreviousCharsAsToken( tokenType );
                 Advance();
             }
-            return NotEnoughData();
+            return NotEnoughData( tokenType );
         }
     }
 }

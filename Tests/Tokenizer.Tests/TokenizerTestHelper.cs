@@ -13,8 +13,12 @@ namespace Tokenizer.Tests
             CTokenizer tokenizer = new CTokenizer( seq );
             while( true )
             {
-                OperationStatus token = tokenizer.Read();
-                if( token != OperationStatus.Done ) break;
+                OperationStatus status = tokenizer.Read();
+                if( status == OperationStatus.NeedMoreData )
+                {
+                    if( tokenizer.CurrentToken.TokenType != TokenType.Unknown ) _tokens.Add( tokenizer.CurrentToken );
+                    break;
+                }
                 _tokens.Add( tokenizer.CurrentToken );
             }
         }

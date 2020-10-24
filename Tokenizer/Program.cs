@@ -39,20 +39,12 @@ namespace Tokenizer
                 }
                 ArrayPoolBufferWriter<char> buffer = new ArrayPoolBufferWriter<char>();
                 Encoding.UTF8.GetChars( result.Buffer, buffer );
-                var t = new ReadOnlySequence<char>( buffer.WrittenMemory );
-                ReadOnlySequence<char> res = t.Slice( new ReadOnlySequence<char>( new char[50] ).End );
-                Console.WriteLine( res.GetType() );
-                Console.WriteLine( res.Length );
-                ParseSelf( filePath, t );
+                ParseSelf( filePath, new ReadOnlySequence<char>( buffer.WrittenMemory ) );
             }
         }
 
         static void ParseSelf( string filePath, ReadOnlySequence<char> content )
         {
-            if( filePath == @"C:\dev\FuGetGallery\Program.cs" || filePath == @"C:\dev\Npm.Net\MetadataStream.cs" )
-            {
-
-            }
             var c = new CTokenizer( content );
             while( true )
             {
