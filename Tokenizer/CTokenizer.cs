@@ -97,6 +97,12 @@ namespace Tokenizer
                 case '.':
                     if( !hasNextChar ) return NotEnoughData( TokenType.Operator );
                     if( chr2 == '=' ) Advance();
+                    if( chr2 == '.' )
+                    {
+                        Advance();
+                        if( !_reader.TryPeek( out char chr3 ) ) return NotEnoughData( TokenType.Operator );
+                        else if( chr3 == '.' ) Advance();
+                    }
                     return PreviousCharsAsToken( TokenType.Operator );
                 case '*':
                     if( !hasNextChar ) return NotEnoughData( TokenType.Operator );
@@ -275,7 +281,7 @@ namespace Tokenizer
                 }
                 if( interpolated && curr == '{' )
                 {
-                    CTokenizer nestedTokenizer = new CTokenizer( _reader.UnreadSequence );
+                    CTokenizer nestedTokenizer = new CTokenizer( _reader.Sequence.Slice( _reader.Position, _reader.Length - _reader.Consumed ) );//TODO: UnreadSequence in .NET 5
                     while( true )
                     {
                         OperationStatus status = nestedTokenizer.Read();
