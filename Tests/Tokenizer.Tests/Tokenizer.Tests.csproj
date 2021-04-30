@@ -2,7 +2,6 @@
 
   <PropertyGroup>
     <TargetFramework>net5</TargetFramework>
-
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
@@ -17,7 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\Tokenizer\Tokenizer.csproj" />
+    <ProjectReference Include="..\..\Tokenizer\Kuinox.CTokenizer.csproj" />
   </ItemGroup>
 
 </Project>
