@@ -5,7 +5,7 @@ environment:
 install: []
 version: build{build}
 image: Visual Studio 2019
-clone_folder: C:\CKli-World\IoT\CK-MQTT
+clone_folder: C:\Kuinox\CTokenizer
 branches:
   only:
     - master
