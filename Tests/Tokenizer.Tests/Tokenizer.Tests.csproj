@@ -16,7 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\Tokenizer\Kuinox.CTokenizer.csproj" />
+    <ProjectReference Include="..\..\Kuinox.CTokenizer\Kuinox.CTokenizer.csproj" />
   </ItemGroup>
 
 </Project>
